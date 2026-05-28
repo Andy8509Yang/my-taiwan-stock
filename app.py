@@ -5,22 +5,72 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import requests
 
-# 💡 內建熱門股名稱字典，彻底取代線上的 .info 查詢，速度極快且防封鎖
-STOCK_NAMES = {
-    "2330": "台積電", "2317": "鴻海", "2454": "聯發科", "2308": "台達電",
-    "2881": "富邦金", "2882": "國泰金", "0050": "元大台灣50", "0056": "元大高股息",
-    "2603": "長榮", "2382": "廣達"
-}
+# =====================================================================
+# 🌐 0. 雲端即時抓取全台股「上市+上櫃」股票與 ETF 清單
+# =====================================================================
+@st.cache_data(ttl=86400)  # 💡 快取 24 小時，每天只會偷偷下載一次，完全不影響網頁速度
+def load_all_taiwan_stocks():
+    """
+    直接連線台灣證券交易所(TWSE)官方對應表，抓取全台灣所有最新股票與 ETF 代號名稱
+    """
+    stock_dict = {}
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    }
+    
+    # 1. 抓取上市股票與 ETF (含 0050, 0056 等)
+    try:
+        res = requests.get("https://isin.twse.com.tw/isin/C_public.jsp?strMode=2", headers=headers, timeout=10)
+        res.encoding = 'big5'  # 證交所舊網站使用 Big5 編碼
+        dfs = pd.read_html(res.text)
+        if dfs:
+            df = dfs[0]
+            for val in df[0]:
+                if pd.isna(val): continue
+                parts = str(val).split() # 自動拆開 "2330　台積電"
+                if len(parts) >= 2:
+                    code, name = parts[0], parts[1]
+                    # 篩選標準台股代碼 (4碼或6碼純數字，過濾權證與特別股)
+                    if code.isdigit() and (len(code) == 4 or len(code) == 6):
+                        stock_dict[code] = name
+    except Exception:
+        pass # 若網路異常則跳過
+        
+    # 2. 抓取上櫃股票與 ETF
+    try:
+        res = requests.get("https://isin.twse.com.tw/isin/C_public.jsp?strMode=4", headers=headers, timeout=10)
+        res.encoding = 'big5'
+        dfs = pd.read_html(res.text)
+        if dfs:
+            df = dfs[0]
+            for val in df[0]:
+                if pd.isna(val): continue
+                parts = str(val).split()
+                if len(parts) >= 2:
+                    code, name = parts[0], parts[1]
+                    if code.isdigit() and (len(code) == 4 or len(code) == 6):
+                        stock_dict[code] = name
+    except Exception:
+        pass
+        
+    # 3. 終極防護保底：如果政府網站剛好斷線維修，啟用這份備用名單防止網頁壞掉
+    if not stock_dict:
+        stock_dict = {
+            "2330": "台積電", "2317": "鴻海", "2454": "聯發科", "2308": "台達電",
+            "2881": "富邦金", "2882": "國泰金", "0050": "元大台灣50", "0056": "元大高股息",
+            "2603": "長榮", "2382": "廣達"
+        }
+    return stock_dict
+
+# 立即啟動全台股資料庫載入
+all_stocks = load_all_taiwan_stocks()
+
 
 # =====================================================================
 # 🔮 1. 獨立的多空技術面診斷 Function
 # =====================================================================
 def diagnose_trend(current_price, ma5, ma20):
-    """
-    根據最新股價、5MA、20MA 的相對位置，回傳狀態標籤與診斷詳細文字
-    """
     try:
-        # 強制轉換確保是純數字純量 (Scalar Float)
         c_p = float(current_price)
         m5 = float(ma5)
         m20 = float(ma20)
@@ -59,24 +109,51 @@ tab1, tab2 = st.tabs(["📈 個股看盤與診斷", "📋 綜合多空分類清�
 
 
 # =====================================================================
-# 📈 頁籤一：個股看盤與診斷 (✨ 改回極度穩定的 Ticker.history 結構)
+# 📈 頁籤一：個股看盤與診斷 (🔥 升級：智慧聯想搜尋輸入框)
 # =====================================================================
 with tab1:
     st.sidebar.header("⚙️ 個股看盤參數")
-    stock_id = st.sidebar.text_input("請輸入台股代號：", "2330", key="single_stock")
+    
+    # 💡 將全台股字典打包成 "代號 - 名稱" 的格式，例如 "2330 - 台積電"
+    stock_options = [f"{code} - {name}" for code, name in all_stocks.items()]
+    
+    # 自動尋找「2330 - 台積電」在清單中的位置作為初始預設值
+    default_index = 0
+    for i, option in enumerate(stock_options):
+        if option.startswith("2330"):
+            default_index = i
+            break
+            
+    # 🔥 關鍵改良：改用 selectbox，Streamlit 網頁上只要對它打字，就會啟動像 Google 一樣的即時聯想過濾
+    selected_stock = st.sidebar.selectbox(
+        "請輸入股票代號或名稱：",
+        options=stock_options,
+        index=default_index,
+        key="cool_search_box"
+    )
+    
+    # 從選中的文字中切出真正的股票代號 (例如從 "2330 - 台積電" 拿取 "2330")
+    stock_id = selected_stock.split(" - ")[0]
+    
     period = st.sidebar.selectbox("請選擇時間區間：", ["1個月","3個月", "6個月", "1年","5年"], key="single_period")
     period_map = {"1個月": "1mo", "3個月": "3mo", "6個月": "6mo", "1年": "1y", "5年": "5y"}
 
     if not stock_id.endswith(".TW") and not stock_id.endswith(".TWO"):
+        # 簡單區分上市上櫃後綴 (大部分上櫃是數字較大或特定代號，這裡用全方位測試防錯)
         target_id = f"{stock_id}.TW"
     else:
         target_id = stock_id
 
     try:
-        # 🔥 關鍵修正：單股查詢用 Ticker.history，絕對是純單層欄位，徹底解決 float() 噴 Series 的錯誤
+        # 單股查詢
         ticker_obj = yf.Ticker(target_id, session=session)
         df = ticker_obj.history(period=period_map[period])
         
+        # 如果用 .TW 找不到，自動切換成 .TWO (上櫃市場) 再試一次
+        if df.empty:
+            target_id = f"{stock_id}.TWO"
+            df = yf.Ticker(target_id, session=session).history(period=period_map[period])
+
         if df.empty:
             st.error("⚠️ 找不到該股票資料，請確認代號是否正確。")
         else:
@@ -84,16 +161,15 @@ with tab1:
             df['MA5'] = df['Close'].rolling(window=5).mean()
             df['MA20'] = df['Close'].rolling(window=20).mean()
             
-            # 取出最後一筆
             latest = df.iloc[-1]
             c_p = float(latest['Close'])
             m5 = float(latest['MA5'])
             m20 = float(latest['MA20'])
             
-            st.subheader("🔮 智慧多空技術面診斷")
+            # 顯示當前看盤的股票完整名稱
+            st.subheader(f"🔮 {selected_stock} - 智慧多空技術面診斷")
             status, alert_message = diagnose_trend(c_p, m5, m20)
             
-            # 根據狀態著色顯示
             if status == "多頭排列": st.success(alert_message)
             elif status == "多頭震盪": st.warning(alert_message)
             elif status == "空頭排列": st.error(alert_message)
@@ -109,7 +185,7 @@ with tab1:
             fig.add_trace(go.Scatter(x=df.index, y=df['MA5'], name='5MA', line=dict(color='orange', width=1.5)), row=1, col=1)
             fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], name='20MA', line=dict(color='deepskyblue', width=1.5)), row=1, col=1)
             fig.add_trace(go.Bar(x=df.index, y=df['Volume'], name='成交量', marker_color='dimgray'), row=2, col=1)
-            fig.update_layout(title=f"📈 {stock_id} - 歷史技術線圖", xaxis_rangeslider_visible=False, height=600, template="plotly_dark", hovermode="x unified")
+            fig.update_layout(title=f"📈 {selected_stock} - 歷史技術線圖", xaxis_rangeslider_visible=False, height=600, template="plotly_dark", hovermode="x unified")
             st.plotly_chart(fig, use_container_width=True)
 
     except Exception as e:
@@ -117,7 +193,7 @@ with tab1:
 
 
 # =====================================================================
-# 📋 頁籤二：綜合多空分類清單 (✨ 欄位結構防呆強化版)
+# 📋 頁籤二：綜合多空分類清單 (🔥 升級：共用全台股中文大字典)
 # =====================================================================
 with tab2:
     st.subheader("📋 追蹤個股多空狀態大盤點")
@@ -129,29 +205,39 @@ with tab2:
     if st.button("🚀 開始全面多空大掃描"):
         pool_list = [s.strip() for s in stock_input.split(",") if s.strip()]
         
-        list_bull = []       # 強勢多頭
-        list_shake = []      # 多頭震盪
-        list_bear = []       # 弱勢空頭
-        list_rebound = []    # 空頭反彈
-        list_unknown = []    # 其他/失敗
+        list_bull = []       
+        list_shake = []      
+        list_bear = []       
+        list_rebound = []    
+        list_unknown = []    
         
-        with st.spinner("🚀 安全打包下載中..."):
-            id_map = {sid: (f"{sid}.TW" if not sid.endswith(".TW") and not sid.endswith(".TWO") else sid) for sid in pool_list}
-            target_ids = list(id_map.values())
+        with st.spinner("🚀 全台股大數據比對中..."):
+            # 建立雙重測試後綴，確保不論上市上櫃都能一網打盡
+            target_ids = []
+            for sid in pool_list:
+                if not sid.endswith(".TW") and not sid.endswith(".TWO"):
+                    target_ids.extend([f"{sid}.TW", f"{sid}.TWO"])
+                else:
+                    target_ids.append(sid)
             
             try:
-                # 批次下載歷史價格
+                # 批次一鍵下載
                 all_data = yf.download(tickers=target_ids, period="1mo", session=session, progress=False)
                 
                 for sid in pool_list:
-                    t_id = id_map[sid]
                     try:
                         t_df = pd.DataFrame()
+                        # 先測試是不是上市 (.TW)
+                        t_id = f"{sid}.TW" if not sid.endswith(".TW") and not sid.endswith(".TWO") else sid
                         
-                        # 🔥 核心防呆：精密拆解 yf.download 吐出來的各種索引可能
                         if isinstance(all_data.columns, pd.MultiIndex):
-                            if ('Close', t_id) in all_data.columns:
+                            if ('Close', t_id) in all_data.columns and not all_data[('Close', t_id)].dropna().empty:
                                 t_df = pd.DataFrame({'Close': all_data[('Close', t_id)]})
+                            else:
+                                # 如果上市沒資料，嘗試切換上櫃 (.TWO)
+                                t_id = f"{sid}.TWO"
+                                if ('Close', t_id) in all_data.columns:
+                                    t_df = pd.DataFrame({'Close': all_data[('Close', t_id)]})
                         else:
                             if 'Close' in all_data.columns:
                                 t_df = pd.DataFrame({'Close': all_data['Close']})
@@ -159,7 +245,6 @@ with tab2:
                         t_df = t_df.dropna()
                         
                         if not t_df.empty and len(t_df) >= 5:
-                            # 計算均線
                             t_df['MA5'] = t_df['Close'].rolling(window=5).mean()
                             if len(t_df) >= 20:
                                 t_df['MA20'] = t_df['Close'].rolling(window=20).mean()
@@ -171,52 +256,5 @@ with tab2:
                             m5 = float(t_latest['MA5'])
                             m20 = float(t_latest['MA20'])
                             
-                            c_name = STOCK_NAMES.get(sid, "")
-                            display_text = f"🔹 **{sid} {c_name}** (收盤: {c_price:.2f})"
-                            
-                            status, _ = diagnose_trend(c_price, m5, m20)
-                            
-                            if status == "多頭排列": list_bull.append(display_text)
-                            elif status == "多頭震盪": list_shake.append(display_text)
-                            elif status == "空頭排列": list_bear.append(display_text)
-                            elif status == "空頭反彈": list_rebound.append(display_text)
-                            else: list_unknown.append(display_text)
-                        else:
-                            list_unknown.append(f"❌ {sid} (無足夠交易資料)")
-                    except Exception:
-                        list_unknown.append(f"❌ {sid} (解析錯誤)")
-            except Exception as e:
-                st.error(f"連線至伺服器大禮包失敗：{e}")
-        
-        st.success("✨ 全面掃描完成！以下是最新分類清單：")
-        
-        # 橫向排版展示結果
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            st.markdown("### 🟢 強勢多頭排列")
-            if list_bull:
-                for item in list_bull: st.write(item)
-            else: st.write("（目前無股票符合）")
-                
-        with col2:
-            st.markdown("### 🟡 多頭高檔震盪")
-            if list_shake:
-                for item in list_shake: st.write(item)
-            else: st.write("（目前無股票符合）")
-                
-        with col3:
-            st.markdown("### 🔵 空頭低檔反彈")
-            if list_rebound:
-                for item in list_rebound: st.write(item)
-            else: st.write("（目前無股票符合）")
-                
-        with col4:
-            st.markdown("### 🔴 弱勢空頭排列")
-            if list_bear:
-                for item in list_bear: st.write(item)
-            else: st.write("（目前無股票符合）")
-
-        if list_unknown:
-            with st.expander("ℹ️ 未能成功分類或盤整個股"):
-                for item in list_unknown: st.write(item)
+                            # 🔥 升級：直接從全台股雲端字典獲取最精準的中文名稱！
+                            c_name =
