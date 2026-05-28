@@ -6,29 +6,17 @@ from plotly.subplots import make_subplots
 import requests
 
 # =====================================================================
-# 🌐 1. 全台股大資料庫 (內建 100+ 檔核心熱門股保底，含 6919 與主流 ETF)
+# 🌐 1. 全台股大資料庫 (內建核心熱門股保底)
 # =====================================================================
 @st.cache_data(ttl=86400)
 def load_all_taiwan_stocks():
-    # 💡 核心保底大清單：確保政府網站阻擋海外 IP 時，搜尋聯想功能依然強大完整！
     stock_dict = {
         "2330": "台積電", "2317": "鴻海", "2454": "聯發科", "2308": "台達電", 
         "2382": "廣達", "2303": "聯電", "2881": "富邦金", "2882": "國泰金", 
-        "2886": "兆豐金", "2891": "中信金", "2884": "玉山金", "2892": "第一金",
-        "5880": "合庫金", "2880": "華南金", "2885": "元大金", "2890": "永豐金",
-        "0050": "元大台灣50", "0056": "元大高股息", "00878": "國泰永續高股息", 
-        "00919": "群益台灣精選高利", "00929": "復華台灣科技優息", "00940": "元大台灣價值高息", 
-        "6919": "康霈", "2603": "長榮", "2609": "陽明", "2615": "萬海",
-        "2618": "長榮航", "2610": "華航", "2357": "華碩", "2324": "仁寶", 
-        "2353": "宏碁", "3231": "緯創", "2379": "瑞昱", "3034": "聯詠",
-        "3008": "大立光", "2327": "國巨", "3711": "日月光投控", "1101": "台泥", 
-        "1102": "亞泥", "1301": "台塑", "1303": "南亞", "2002": "中鋼",
-        "2412": "中華電", "3045": "台灣大", "4904": "遠傳"
+        "2886": "兆豐金", "2891": "中信金", "0050": "元大台灣50", "0056": "元大高股息", 
+        "00878": "國泰永續高股息", "6919": "康霈", "2603": "長榮", "3443": "創意"
     }
-    
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-    
-    # 嘗試同步證交所最新的上市清單
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
     try:
         res = requests.get("https://isin.twse.com.tw/isin/C_public.jsp?strMode=2", headers=headers, timeout=4)
         res.encoding = 'big5'
@@ -40,9 +28,7 @@ def load_all_taiwan_stocks():
                 if len(parts) >= 2 and parts[0].isdigit() and len(parts[0]) in [4, 6]:
                     stock_dict[parts[0]] = parts[1]
     except Exception:
-        pass # 失敗則安靜跳過，不影響網頁運行
-        
-    # 嘗試同步證交所最新的上櫃清單
+        pass
     try:
         res = requests.get("https://isin.twse.com.tw/isin/C_public.jsp?strMode=4", headers=headers, timeout=4)
         res.encoding = 'big5'
@@ -55,17 +41,15 @@ def load_all_taiwan_stocks():
                     stock_dict[parts[0]] = parts[1]
     except Exception:
         pass
-            
     return stock_dict
 
 all_stocks = load_all_taiwan_stocks()
 
 
 # =====================================================================
-# 🛡️ 2. 安全防崩潰數值提取器 & 多空技術面診斷邏輯
+# 🛡️ 2. 安全防崩潰診斷邏輯
 # =====================================================================
 def safe_float(val):
-    """ 強力防禦：確保任何隱藏的 Series 數據結構都能被安全降維成單一數字 """
     if isinstance(val, pd.Series):
         return float(val.iloc[0]) if not val.empty else float('nan')
     return float(val)
@@ -98,78 +82,76 @@ def diagnose_trend(current_price, ma5, ma20):
 st.set_page_config(page_title="台股自製看盤系統", layout="wide")
 st.title("📊 台灣股市智能 K 線與多空選股系統")
 
-# 優化 Session，稍微偽裝成一般瀏覽器行為降低被 Yahoo 阻擋的機率
 session = requests.Session()
 session.headers.update({
-    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
+    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
 })
 
 tab1, tab2 = st.tabs(["📈 個股看盤與診斷", "📋 綜合多空分類清單"])
 
 
 # =====================================================================
-# 📈 頁籤一：個股看盤與診斷
+# 📈 頁籤一：個股看盤與診斷（升級：支援任意代號手動輸入）
 # =====================================================================
 with tab1:
     st.sidebar.header("⚙️ 個股看盤參數")
     
-    stock_options = [f"{code} - {name}" for code, name in all_stocks.items()]
-    default_idx = next((i for i, opt in enumerate(stock_options) if opt.startswith("2330")), 0)
-        
-    selected_stock = st.sidebar.selectbox(
-        "請輸入股票代號或名稱：",
-        options=stock_options,
-        index=default_idx,
-        key="google_like_search"
-    )
+    # 💡 雙層防線：先讓使用者選擇要手動輸入，還是用下拉選單
+    input_mode = st.sidebar.radio("請選擇輸入方式：", ["✍️ 手動輸入任意代號", "🔍 從全台股清單選取"])
     
-    stock_id = selected_stock.split(" - ")[0]
+    if input_mode == "✍️ 手動輸入任意代號":
+        stock_id = st.sidebar.text_input("請輸入 4 位數台股代號（例如: 3443）：", value="3443").strip()
+        c_name = all_stocks.get(stock_id, "(自訂個股)")
+        selected_stock = f"{stock_id} - {c_name}"
+    else:
+        stock_options = [f"{code} - {name}" for code, name in all_stocks.items()]
+        default_idx = next((i for i, opt in enumerate(stock_options) if opt.startswith("2330")), 0)
+        selected_stock = st.sidebar.selectbox("請選擇股票：", options=stock_options, index=default_idx)
+        stock_id = selected_stock.split(" - ")[0]
+    
     period = st.sidebar.selectbox("請選擇時間區間：", ["1個月","3個月", "6個月", "1年","5年"], key="single_period")
     period_map = {"1個月": "1mo", "3個月": "3mo", "6個月": "6mo", "1年": "1y", "5年": "5y"}
 
-    target_id = f"{stock_id}.TW"
-    try:
-        df = yf.Ticker(target_id, session=session).history(period=period_map[period])
-        
-        # 若上市找不到，切換至上櫃 (.TWO)
-        if df.empty:
-            target_id = f"{stock_id}.TWO"
+    if stock_id:
+        target_id = f"{stock_id}.TW"
+        try:
             df = yf.Ticker(target_id, session=session).history(period=period_map[period])
+            if df.empty:
+                target_id = f"{stock_id}.TWO"
+                df = yf.Ticker(target_id, session=session).history(period=period_map[period])
 
-        if df.empty:
-            st.error("⚠️ Yahoo 雲端伺服器目前回應繁忙（Rate Limited），請稍等幾秒後重新操作或重新整理網頁。")
-        else:
-            df['MA5'] = df['Close'].rolling(window=5).mean()
-            df['MA20'] = df['Close'].rolling(window=20).mean()
-            
-            latest = df.iloc[-1]
-            c_p = safe_float(latest['Close'])
-            m5 = safe_float(latest['MA5'])
-            m20 = safe_float(latest['MA20'])
-            
-            st.subheader(f"🔮 {selected_stock} - 智慧多空技術面診斷")
-            status, alert_message = diagnose_trend(c_p, m5, m20)
-            
-            if status == "多頭排列": st.success(alert_message)
-            elif status == "多頭震盪": st.warning(alert_message)
-            elif status == "空頭排列": st.error(alert_message)
-            else: st.info(alert_message)
+            if df.empty:
+                st.error("⚠️ Yahoo 金融伺服器目前回應繁忙（Rate Limited）或無此股票資料，請稍等幾秒後再試一次。")
+            else:
+                df['MA5'] = df['Close'].rolling(window=5).mean()
+                df['MA20'] = df['Close'].rolling(window=20).mean()
+                
+                latest = df.iloc[-1]
+                c_p = safe_float(latest['Close'])
+                m5 = safe_float(latest['MA5'])
+                m20 = safe_float(latest['MA20'])
+                
+                st.subheader(f"🔮 {selected_stock} - 智慧多空技術面診斷")
+                status, alert_message = diagnose_trend(c_p, m5, m20)
+                
+                if status == "多頭排列": st.success(alert_message)
+                elif status == "多頭震盪": st.warning(alert_message)
+                elif status == "空頭排列": st.error(alert_message)
+                else: st.info(alert_message)
 
-            # 繪製 K 線
-            fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08, row_heights=[0.7, 0.3])
-            fig.add_trace(go.Candlestick(
-                x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name="K線",
-                increasing_line_color='#FF3333', increasing_fillcolor='#FF3333',
-                decreasing_line_color='#00AA00', decreasing_fillcolor='#00AA00'
-            ), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df.index, y=df['MA5'], name='5MA', line=dict(color='orange', width=1.5)), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], name='20MA', line=dict(color='deepskyblue', width=1.5)), row=1, col=1)
-            fig.add_trace(go.Bar(x=df.index, y=df['Volume'], name='成交量', marker_color='dimgray'), row=2, col=1)
-            fig.update_layout(title=f"📈 {selected_stock} - 歷史技術線圖", xaxis_rangeslider_visible=False, height=600, template="plotly_dark", hovermode="x unified")
-            st.plotly_chart(fig, use_container_width=True)
-
-    except Exception as e:
-        st.warning("⚠️ 目前雲端 IP 存取過於頻繁，Yahoo 金融資料庫正在洗牌中，請稍候再點選查看。")
+                fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08, row_heights=[0.7, 0.3])
+                fig.add_trace(go.Candlestick(
+                    x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name="K線",
+                    increasing_line_color='#FF3333', increasing_fillcolor='#FF3333',
+                    decreasing_line_color='#00AA00', decreasing_fillcolor='#00AA00'
+                ), row=1, col=1)
+                fig.add_trace(go.Scatter(x=df.index, y=df['MA5'], name='5MA', line=dict(color='orange', width=1.5)), row=1, col=1)
+                fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], name='20MA', line=dict(color='deepskyblue', width=1.5)), row=1, col=1)
+                fig.add_trace(go.Bar(x=df.index, y=df['Volume'], name='成交量', marker_color='dimgray'), row=2, col=1)
+                fig.update_layout(title=f"📈 {selected_stock} - 歷史技術線圖", xaxis_rangeslider_visible=False, height=600, template="plotly_dark", hovermode="x unified")
+                st.plotly_chart(fig, use_container_width=True)
+        except Exception:
+            st.warning("⚠️ 目前雲端存取過於頻繁，請稍候再點選查看。")
 
 
 # =====================================================================
@@ -179,7 +161,7 @@ with tab2:
     st.subheader("📋 追蹤個股多空狀態大盤點")
     st.write("系統會自動抓取下方清單中所有股票的最新收盤價與均線，並自動分門別類。")
 
-    default_stocks = "2330, 2317, 2454, 2308, 2881, 2882, 0050, 0056, 2603, 2382"
+    default_stocks = "2330, 2317, 2454, 3443, 6919, 0050, 0056"
     stock_input = st.text_area("✍️ 編輯你要偵測的股票代號清單（請用逗號隔開）：", default_stocks)
     
     if st.button("🚀 開始全面多空大掃描"):
@@ -196,7 +178,6 @@ with tab2:
                 
                 for sid in pool_list:
                     try:
-                        # 安全過濾：從下載的多重索引 DataFrame 中精準抽離單一股票的 Close Series
                         series_close = pd.Series()
                         if isinstance(all_data.columns, pd.MultiIndex):
                             if ('Close', f"{sid}.TW") in all_data.columns:
@@ -229,7 +210,7 @@ with tab2:
                     except Exception:
                         list_unknown.append(f"❌ {sid} (解析超時)")
             except Exception:
-                st.error("⚠️ 批次下載失敗。此為 Streamlit Cloud 的共享 IP 觸發了 Yahoo 的防爬蟲機制，請隔 1-2 分鐘後再試。")
+                st.error("⚠️ 批次下載失敗，請隔 1-2 分鐘後再試。")
         
         st.success("✨ 全面掃描完成！以下是最新分類清單：")
         
