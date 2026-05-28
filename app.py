@@ -5,6 +5,13 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import requests
 
+# 💡 新增：內建熱門股名稱字典，徹底取代 .info 查詢，防止被 Yahoo 封鎖
+STOCK_NAMES = {
+    "2330": "台積電", "2317": "鴻海", "2454": "聯發科", "2308": "台達電",
+    "2881": "富邦金", "2882": "國泰金", "0050": "元大台灣50", "0056": "元大高股息",
+    "2603": "長榮", "2382": "廣達"
+}
+
 # =====================================================================
 # 🔮 1. 獨立的多空技術面診斷 Function
 # =====================================================================
@@ -12,16 +19,19 @@ def diagnose_trend(current_price, ma5, ma20):
     """
     根據最新股價、5MA、20MA 的相對位置，回傳狀態標籤與診斷詳細文字
     """
+    if pd.isna(current_price) or pd.isna(ma5) or pd.isna(ma20):
+        return "盤整格局", "🔄 資料計算不足，短線方向不明確。"
+        
     if current_price >= ma5 and ma5 >= ma20:
-        return "多頭排列", f"📈 **【強勢多頭排列】** 目前股價（{current_price:.2f}）踩在 5MA 與 20MA 之上，且均線黃金交叉向上，屬於強勢進攻格局！"
+        return "多頭排列", f"增溫"
     elif current_price < ma5 and ma5 >= ma20:
-        return "多頭震盪", f"⚠️ **【多頭高檔震盪】** 雖然中期還是多頭（5MA > 20MA），但短期股價已跌破 5MA，需注意高檔洗盤或獲利回吐壓力。"
+        return "多頭震盪", f"震盪"
     elif current_price <= ma5 and ma5 < ma20:
-        return "空頭排列", f"📉 **【弱勢空頭排列】** 目前均線呈現死亡交叉，股價壓在 20MA（月線）下方，短期內操作建議保守、注意風險！"
+        return "空頭排列", f"警戒"
     elif current_price > ma5 and ma5 < ma20:
-        return "空頭反彈", f"🔄 **【空頭低檔反彈】** 目前整體雖然還是空頭格局（5MA < 20MA），但股價已經站上 5MA 展開反彈，可觀察能否進一步站穩月線築底。"
+        return "空頭反彈", f"反彈"
     else:
-        return "盤整格局", "🔄 **【盤整格局】** 均線糾結，短線方向不明確。"
+        return "盤整格局", "🔄 均線糾結中。"
 
 
 # =====================================================================
@@ -30,7 +40,7 @@ def diagnose_trend(current_price, ma5, ma20):
 st.set_page_config(page_title="台股自製看盤系統", layout="wide")
 st.title("📊 台灣股市智能 K 線與多空選股系統")
 
-# 建立安全連線會話（防止 Yahoo Finance 阻擋）
+# 建立安全連線會話
 session = requests.Session()
 session.headers.update({
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
@@ -41,7 +51,7 @@ tab1, tab2 = st.tabs(["📈 個股看盤與診斷", "📋 綜合多空分類清�
 
 
 # =====================================================================
-# 📈 頁籤一：個股看盤與診斷 (原功能保留並優化)
+# 📈 頁籤一：個股看盤與診斷
 # =====================================================================
 with tab1:
     st.sidebar.header("⚙️ 個股看盤參數")
@@ -55,8 +65,8 @@ with tab1:
         target_id = stock_id
 
     try:
-        ticker = yf.Ticker(target_id, session=session)
-        df = ticker.history(period=period_map[period])
+        # 單檔查詢也改用更穩定的 yf.download
+        df = yf.download(target_id, period=period_map[period], session=session, progress=False)
         
         if df.empty:
             st.error("⚠️ 找不到該股票資料，請確認代號是否正確。")
@@ -65,13 +75,22 @@ with tab1:
             df['MA20'] = df['Close'].rolling(window=20).mean()
             latest = df.iloc[-1]
             
-            st.subheader("🔮 智慧多空技術面診斷")
-            status, alert_message = diagnose_trend(latest['Close'], latest['MA5'], latest['MA20'])
+            c_p = float(latest['Close'])
+            m5 = float(latest['MA5'])
+            m20 = float(latest['MA20'])
             
-            if status == "多頭排列": st.success(alert_message)
-            elif status == "多頭震盪": st.warning(alert_message)
-            elif status == "空頭排列": st.error(alert_message)
-            else: st.info(alert_message)
+            st.subheader("🔮 智慧多空技術面診斷")
+            status, _ = diagnose_trend(c_p, m5, m20)
+            
+            # 個股頁面顯示詳細白話文說明
+            if status == "多頭排列":
+                st.success(f"📈 **【強勢多頭排列】** 目前股價（{c_p:.2f}）踩在 5MA 與 20MA 之上，且均線黃金交叉向上，屬於強勢進攻格局！")
+            elif status == "多頭震盪":
+                st.warning(f"⚠️ **【多頭高檔震盪】** 雖然中期還是多頭（5MA > 20MA），但短期股價已跌破 5MA，需注意高檔洗盤或獲利回吐壓力。")
+            elif status == "空頭排列":
+                st.error(f"📉 **【弱勢空頭排列】** 目前均線呈現死亡交叉，股價壓在 20MA（月線）下方，短期內操作建議保守、注意風險！")
+            else:
+                st.info(f"🔄 **【空頭低檔反彈】** 目前整體雖然還是空頭格局（5MA < 20MA），但股價已經站上 5MA 展開反彈，可觀察能否進一步站穩月線築底。")
 
             # 繪製 K 線圖
             fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08, row_heights=[0.7, 0.3])
@@ -91,101 +110,105 @@ with tab1:
 
 
 # =====================================================================
-# 📋 頁籤二：綜合多空分類清單 (✨ 全新開發功能)
+# 📋 頁籤二：綜合多空分類清單 (🔥 安全速配改良版)
 # =====================================================================
 with tab2:
     st.subheader("📋 追蹤個股多空狀態大盤點")
     st.write("系統會自動抓取下方清單中所有股票的最新收盤價與均線，並自動分門別類。")
 
-    # 預設一組台灣熱門的股票清單，使用者也可以在網頁上自己修改增減
     default_stocks = "2330, 2317, 2454, 2308, 2881, 2882, 0050, 0056, 2603, 2382"
     stock_input = st.text_area("✍️ 編輯你要偵測的股票代號清單（請用逗號隔開）：", default_stocks)
     
-    # 按下按鈕後才開始執行掃描，避免網頁一直重複載入
     if st.button("🚀 開始全面多空大掃描"):
-        # 將輸入的字串拆解成獨立的代號清單
         pool_list = [s.strip() for s in stock_input.split(",") if s.strip()]
         
-        # 準備四個狀況的空箱子（List）
         list_bull = []       # 強勢多頭
         list_shake = []      # 多頭震盪
         list_bear = []       # 弱勢空頭
         list_rebound = []    # 空頭反彈
-        list_unknown = []    # 其他/盤整
+        list_unknown = []    # 其他/失敗
         
-        # 顯示進度條
-        with st.spinner("正在安全下載各股數據並進行智慧分類中，請稍候..."):
-            for sid in pool_list:
-                # 處理台股後綴
-                if not sid.endswith(".TW") and not sid.endswith(".TWO"):
-                    t_id = f"{sid}.TW"
-                else:
-                    t_id = sid
+        with st.spinner("🚀 安全打包下載中（此新算法只需 1 次請求，絕不卡頓封鎖）..."):
+            # 1. 先將所有代號轉換好後綴
+            id_map = {sid: (f"{sid}.TW" if not sid.endswith(".TW") and not sid.endswith(".TWO") else sid) for sid in pool_list}
+            target_ids = list(id_map.values())
+            
+            try:
+                # 🔥 核心修正：用 yf.download 一口氣打包下載所有股票資料 (歷史資料拉 1 個月對計算 20MA 很夠用)
+                all_data = yf.download(tickers=target_ids, period="1mo", group_by='ticker', session=session, progress=False)
                 
-                try:
-                    # 抓取最近 1 個月的資料即可（計算20MA綽綽有餘，加快速度）
-                    t_ticker = yf.Ticker(t_id, session=session)
-                    t_df = t_ticker.history(period="1mo")
-                    
-                    if not t_df.empty and len(t_df) >= 20:
-                        t_df['MA5'] = t_df['Close'].rolling(window=5).mean()
-                        t_df['MA20'] = t_df['Close'].rolling(window=20).mean()
+                for sid in pool_list:
+                    t_id = id_map[sid]
+                    try:
+                        # 從大資料包裡抽取單檔股票
+                        if len(target_ids) == 1:
+                            t_df = all_data.copy()
+                        elif isinstance(all_data.columns, pd.MultiIndex) and t_id in all_data.columns.levels[0]:
+                            t_df = all_data[t_id].dropna(subset=['Close'])
+                        else:
+                            t_df = pd.DataFrame()
                         
-                        t_latest = t_df.iloc[-1]
-                        c_price = t_latest['Close']
-                        m5 = t_latest['MA5']
-                        m20 = t_latest['MA20']
-                        
-                        # 獲利股票中英文名稱（如果抓不到就顯示代號）
-                        stock_name = t_ticker.info.get('shortName', sid)
-                        display_text = f"🔹 **{sid} {stock_name}** (收盤價: {c_price:.2f})"
-                        
-                        # 呼叫診斷邏輯進行分類
-                        status, _ = diagnose_trend(c_price, m5, m20)
-                        
-                        if status == "多頭排列": list_bull.append(display_text)
-                        elif status == "多頭震盪": list_shake.append(display_text)
-                        elif status == "空頭排列": list_bear.append(display_text)
-                        elif status == "空頭反彈": list_rebound.append(display_text)
-                        else: list_unknown.append(display_text)
-                except:
-                    # 萬一某一檔股票抓取失敗，自動跳過不讓整個程式當掉
-                    list_unknown.append(f"❌ {sid} (讀取失敗)")
+                        if not t_df.empty and len(t_df) >= 5:
+                            # 計算均線 (如果天數不夠 20 天，則自動用現有天數 expanding 計算，避免報錯)
+                            t_df['MA5'] = t_df['Close'].rolling(window=5).mean()
+                            if len(t_df) >= 20:
+                                t_df['MA20'] = t_df['Close'].rolling(window=20).mean()
+                            else:
+                                t_df['MA20'] = t_df['Close'].expanding().mean()
+                            
+                            t_latest = t_df.iloc[-1]
+                            c_price = float(t_latest['Close'])
+                            m5 = float(t_latest['MA5'])
+                            m20 = float(t_latest['MA20'])
+                            
+                            # 從內建字典獲取中文名稱，沒有就留空
+                            c_name = STOCK_NAMES.get(sid, "")
+                            display_text = f"🔹 **{sid} {c_name}** (收盤: {c_price:.2f})"
+                            
+                            # 判定分類
+                            status, _ = diagnose_trend(c_price, m5, m20)
+                            
+                            if status == "多頭排列": list_bull.append(display_text)
+                            elif status == "多頭震盪": list_shake.append(display_text)
+                            elif status == "空頭排列": list_bear.append(display_text)
+                            elif status == "空頭反彈": list_rebound.append(display_text)
+                            else: list_unknown.append(display_text)
+                        else:
+                            list_unknown.append(f"❌ {sid} (無足夠交易資料)")
+                    except Exception as e:
+                        list_unknown.append(f"❌ {sid} (解析錯誤)")
+            except Exception as e:
+                st.error(f"連線至伺服器大禮包失敗：{e}")
         
-        st.success("✨ 全面掃描完成！以下是分類清單：")
+        st.success("✨ 全面掃描完成！以下是最新分類清單：")
         
-        # 運用 Streamlit 的 4 個區塊（Columns）橫向排版展示結果
+        # 橫向排版展示結果
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
             st.markdown("### 🟢 強勢多頭排列")
             if list_bull:
                 for item in list_bull: st.write(item)
-            else:
-                st.write("（目前無股票符合）")
+            else: st.write("（目前無股票符合）")
                 
         with col2:
             st.markdown("### 🟡 多頭高檔震盪")
             if list_shake:
                 for item in list_shake: st.write(item)
-            else:
-                st.write("（目前無股票符合）")
+            else: st.write("（目前無股票符合）")
                 
         with col3:
             st.markdown("### 🔵 空頭低檔反彈")
             if list_rebound:
                 for item in list_rebound: st.write(item)
-            else:
-                st.write("（目前無股票符合）")
+            else: st.write("（目前無股票符合）")
                 
         with col4:
             st.markdown("### 🔴 弱勢空頭排列")
             if list_bear:
                 for item in list_bear: st.write(item)
-            else:
-                st.write("（目前無股票符合）")
+            else: st.write("（目前無股票符合）")
 
-        # 如果有錯誤或未分類的顯示在最下方
         if list_unknown:
             with st.expander("ℹ️ 未能成功分類或盤整個股"):
                 for item in list_unknown: st.write(item)
