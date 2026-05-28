@@ -13,10 +13,10 @@ st.write("輸入股票代號，自動產生含均線、成交量的專業 K 線�
 # 側邊欄：使用者輸入區
 st.sidebar.header("⚙️ 設定參數")
 stock_id = st.sidebar.text_input("請輸入台股代號：", "2330")
-period = st.sidebar.selectbox("請選擇時間區間：", ["1個月","3個月", "6個月", "1年",])
+period = st.sidebar.selectbox("請選擇時間區間：", ["1個月","3個月", "6個月", "1年","5年"])
 
 # 轉換時間格式給 yfinance
-period_map = {"1個月": "1mo", "3個月": "3mo", "6個月": "6mo", "1年": "1y"}
+period_map = {"1個月": "1mo", "3個月": "3mo", "6個月": "6mo", "1年": "1y", "5年": "5y"}
 
 # 自動處理台灣股票代號後綴
 if not stock_id.endswith(".TW") and not stock_id.endswith(".TWO"):
