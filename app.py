@@ -3,9 +3,37 @@ import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import requests  # 新增：用來幫我們做瀏覽器偽裝
+import requests
 
-# 網頁標題與設定
+# =====================================================================
+# 🔮 1. 獨立的多空技術面診斷 Function
+# =====================================================================
+def diagnose_trend(current_price, ma5, ma20):
+    """
+    根據最新股價、5MA、20MA 的相對位置，回傳對應的 Streamlit 樣式與診斷文字
+    """
+    if current_price >= ma5 and ma5 >= ma20:
+        status = "success"  # 綠色
+        msg = f"📈 **【強勢多頭排列】** 目前股價（{current_price:.2f}）踩在 5MA 與 20MA 之上，且均線黃金交叉向上，屬於強勢進攻格局！"
+    elif current_price < ma5 and ma5 >= ma20:
+        status = "warning"  # 黃色
+        msg = f"⚠️ **【多頭高檔震盪】** 雖然中期還是多頭（5MA > 20MA），但短期股價已跌破 5MA，需注意高檔洗盤或獲利回吐壓力。"
+    elif current_price <= ma5 and ma5 < ma20:
+        status = "error"    # 紅色
+        msg = f"📉 **【弱勢空頭排列】** 目前均線呈現死亡交叉，股價壓在 20MA（月線）下方，短期內操作建議保守、注意風險！"
+    elif current_price > ma5 and ma5 < ma20:
+        status = "info"     # 藍色
+        msg = f"🔄 **【空頭低檔反彈】** 目前整體雖然還是空頭格局（5MA < 20MA），但股價已經站上 5MA 展開反彈，可觀察能否進一步站穩月線築底。"
+    else:
+        status = "info"
+        msg = "🔄 **【盤整格局】** 均線糾結，短線方向不明確，建議觀望。"
+        
+    return status, msg
+
+
+# =====================================================================
+# 🌐 2. 網頁主程式與介面設定
+# =====================================================================
 st.set_page_config(page_title="台股自製看盤系統", layout="wide")
 st.title("📊 台灣股市互動 K 線與智能多空診斷系統")
 st.write("輸入股票代號，自動產生含均線、成交量的專業 K 線圖，並提供智慧多空技術面診斷。")
@@ -25,14 +53,12 @@ else:
     target_id = stock_id
 
 try:
-    # 🔥 核心修正：建立一個帶有安全瀏覽器標頭 (User-Agent) 的連線會話
-    # 這樣 Yahoo Finance 就會以為是真人在看網頁，不會隨便阻擋你
+    # 建立防阻擋瀏覽器連線
     session = requests.Session()
     session.headers.update({
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
     })
     
-    # 將偽裝好的連線會話餵給 yfinance
     ticker = yf.Ticker(target_id, session=session)
     df = ticker.history(period=period_map[period])
     
@@ -43,25 +69,25 @@ try:
         df['MA5'] = df['Close'].rolling(window=5).mean()
         df['MA20'] = df['Close'].rolling(window=20).mean()
 
-        # ------------------ 🔮 智能多空診斷邏輯 ------------------
-        # 取得最新一天的數據來做多空診斷
+        # 取得最新一天的數據
         latest = df.iloc[-1]
-        current_price = latest['Close']
-        ma5_val = latest['MA5']
-        ma20_val = latest['MA20']
         
+        # ------------------ 🔮 呼叫多空診斷 Function ------------------
         st.subheader("🔮 智慧多空技術面診斷")
         
-        # 判斷邏輯（根據 5MA 與 20MA 的相對位置）
-        if current_price >= ma5_val and ma5_val >= ma20_val:
-            st.success(f"📈 **【強勢多頭排列】** 目前股價（{current_price:.2f}）踩在 5MA 與 20MA 之上，且均線黃金交叉向上，屬於強勢進攻格局！")
-        elif current_price < ma5_val and ma5_val >= ma20_val:
-            st.warning(f"⚠️ **【多頭高檔震盪】** 雖然中期還是多頭（5MA > 20MA），但短期股價已跌破 5MA，需注意高檔洗盤或獲利回吐壓力。")
-        elif current_price <= ma5_val and ma5_val < ma20_val:
-            st.error(f"📉 **【弱勢空頭排列】** 目前均線呈現死亡交叉，股價壓在 20MA（月線）下方，短期內操作建議保守、注意風險！")
-        elif current_price > ma5_val and ma5_val < ma20_val:
-            st.info(f"🔄 **【空頭低檔反彈】** 目前整體雖然還是空頭格局（5MA < 20MA），但股價已經站上 5MA 展開反彈，可觀察能否進一步站穩月線築底。")
-        # ------------------------------------------------------
+        # 這裡正式呼叫了最上方定義的診斷 function
+        alert_type, alert_message = diagnose_trend(
+            current_price = latest['Close'], 
+            ma5 = latest['MA5'], 
+            ma20 = latest['MA20']
+        )
+        
+        # 根據 Function 回傳的顏色種類（success/warning/error/info）顯示在網頁上
+        if alert_type == "success": st.success(alert_message)
+        elif alert_type == "warning": st.warning(alert_message)
+        elif alert_type == "error": st.error(alert_message)
+        else: st.info(alert_message)
+        # -----------------------------------------------------------
 
         # 建立雙子圖 (上面畫K線，下面畫成交量)
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
@@ -69,16 +95,10 @@ try:
 
         # 1. 主圖：繪製 K 線 (符合台股習慣：紅漲綠跌)
         fig.add_trace(go.Candlestick(
-            x=df.index,
-            open=df['Open'],
-            high=df['High'],
-            low=df['Low'],
-            close=df['Close'],
+            x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'],
             name="K線",
-            increasing_line_color='#FF3333',  # 上漲紅
-            increasing_fillcolor='#FF3333',
-            decreasing_line_color='#00AA00',  # 下跌綠
-            decreasing_fillcolor='#00AA00'
+            increasing_line_color='#FF3333', increasing_fillcolor='#FF3333',
+            decreasing_line_color='#00AA00', decreasing_fillcolor='#00AA00'
         ), row=1, col=1)
 
         # 2. 主圖：疊加 5MA 與 20MA 均線
@@ -88,10 +108,10 @@ try:
         # 3. 副圖：繪製成交量
         fig.add_trace(go.Bar(x=df.index, y=df['Volume'], name='成交量', marker_color='dimgray'), row=2, col=1)
 
-        # 調整圖表整體外觀（使用高質感暗色系主題）
+        # 調整圖表整體外觀
         fig.update_layout(
             title=f"📈 {stock_id} - 歷史技術線圖",
-            xaxis_rangeslider_visible=False,  # 隱藏下方預設的滑塊以保持乾淨
+            xaxis_rangeslider_visible=False,
             height=650,
             template="plotly_dark",
             hovermode="x unified"
