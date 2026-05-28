@@ -3,6 +3,7 @@ import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+import requests  # 新增：用來幫我們做瀏覽器偽裝
 
 # 網頁標題與設定
 st.set_page_config(page_title="台股自製看盤系統", layout="wide")
@@ -24,8 +25,15 @@ else:
     target_id = stock_id
 
 try:
-    # 抓取股票歷史資料
-    ticker = yf.Ticker(target_id)
+    # 🔥 核心修正：建立一個帶有安全瀏覽器標頭 (User-Agent) 的連線會話
+    # 這樣 Yahoo Finance 就會以為是真人在看網頁，不會隨便阻擋你
+    session = requests.Session()
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+    })
+    
+    # 將偽裝好的連線會話餵給 yfinance
+    ticker = yf.Ticker(target_id, session=session)
     df = ticker.history(period=period_map[period])
     
     if df.empty:
@@ -62,7 +70,7 @@ try:
 
         # 調整圖表整體外觀（使用高質感暗色系主題）
         fig.update_layout(
-            title=f"📈 {stock_id} ({ticker.info.get('longName', '台股')}) - 歷史技術線圖",
+            title=f"📈 {stock_id} - 歷史技術線圖",
             xaxis_rangeslider_visible=False,  # 隱藏下方預設的滑塊以保持乾淨
             height=650,
             template="plotly_dark",
