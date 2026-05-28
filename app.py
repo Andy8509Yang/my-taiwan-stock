@@ -7,8 +7,8 @@ import requests  # 新增：用來幫我們做瀏覽器偽裝
 
 # 網頁標題與設定
 st.set_page_config(page_title="台股自製看盤系統", layout="wide")
-st.title("📊 台灣股市互動 K 線看盤工具")
-st.write("輸入股票代號，自動產生含均線、成交量的專業 K 線圖。")
+st.title("📊 台灣股市互動 K 線與智能多空診斷系統")
+st.write("輸入股票代號，自動產生含均線、成交量的專業 K 線圖，並提供智慧多空技術面診斷。")
 
 # 側邊欄：使用者輸入區
 st.sidebar.header("⚙️ 設定參數")
@@ -42,6 +42,26 @@ try:
         # 計算技術指標：5MA、20MA
         df['MA5'] = df['Close'].rolling(window=5).mean()
         df['MA20'] = df['Close'].rolling(window=20).mean()
+
+        # ------------------ 🔮 智能多空診斷邏輯 ------------------
+        # 取得最新一天的數據來做多空診斷
+        latest = df.iloc[-1]
+        current_price = latest['Close']
+        ma5_val = latest['MA5']
+        ma20_val = latest['MA20']
+        
+        st.subheader("🔮 智慧多空技術面診斷")
+        
+        # 判斷邏輯（根據 5MA 與 20MA 的相對位置）
+        if current_price >= ma5_val and ma5_val >= ma20_val:
+            st.success(f"📈 **【強勢多頭排列】** 目前股價（{current_price:.2f}）踩在 5MA 與 20MA 之上，且均線黃金交叉向上，屬於強勢進攻格局！")
+        elif current_price < ma5_val and ma5_val >= ma20_val:
+            st.warning(f"⚠️ **【多頭高檔震盪】** 雖然中期還是多頭（5MA > 20MA），但短期股價已跌破 5MA，需注意高檔洗盤或獲利回吐壓力。")
+        elif current_price <= ma5_val and ma5_val < ma20_val:
+            st.error(f"📉 **【弱勢空頭排列】** 目前均線呈現死亡交叉，股價壓在 20MA（月線）下方，短期內操作建議保守、注意風險！")
+        elif current_price > ma5_val and ma5_val < ma20_val:
+            st.info(f"🔄 **【空頭低檔反彈】** 目前整體雖然還是空頭格局（5MA < 20MA），但股價已經站上 5MA 展開反彈，可觀察能否進一步站穩月線築底。")
+        # ------------------------------------------------------
 
         # 建立雙子圖 (上面畫K線，下面畫成交量)
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
